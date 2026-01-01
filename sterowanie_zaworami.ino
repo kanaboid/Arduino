@@ -1,86 +1,152 @@
-// --- Definicja Pinów ---
-const byte pinPrzekaznikOtwieranie = 2; // Wyjście na cewkę przekaźnika (równolegle do przycisku w szafie)
-const byte pinStartOtwieranie = 8;      // Przycisk sterujący Arduino (Start procesu)
-const byte pinKrancowkaOtwarty = 7;     // Wejście z optoizolatora (Sygnał: Lampka świeci)
+#include <Wire.h>
+#include <Adafruit_MCP23X17.h> 
 
-// --- Ustawienia Czasowe ---
-const unsigned long maxCzasRuchu = 10000; // 10 sekund - jeśli dłużej, to awaria
+Adafruit_MCP23X17 mcp1;
+Adafruit_MCP23X17 mcp2; // Adres 0x20
 
-// --- Maszyna Stanów ---
-enum Stan { SPOCZYNEK, OTWIERANIE, ZAKONCZONO, BLAD };
-Stan aktualnyStan = SPOCZYNEK;
+// --- UNIWERSALNA KLASA STEROWNIKA ---
+class SterownikZaworu {
+  private:
+    Adafruit_MCP23X17* _mcp; // Wskaźnik (może być pusty!)
+    byte pinPrzekaznik; 
+    byte pinPrzycisk;   
+    byte pinKrancowka;  
+    
+    enum Stan { SPOCZYNEK, OTWIERANIE, ZAKONCZONO, BLAD };
+    Stan aktualnyStan = SPOCZYNEK;
+    unsigned long czasStartuRuchu = 0;
+    const unsigned long maxCzasRuchu = 10000;
 
-unsigned long czasStartuRuchu = 0;
+  public:
+    // Konstruktor
+    // Jeśli sterujemy z Arduino, jako pierwszy argument podamy 'nullptr'
+    SterownikZaworu(Adafruit_MCP23X17* mcp, byte przekaznik, byte przycisk, byte krancowka) {
+      _mcp = mcp; 
+      pinPrzekaznik = przekaznik;
+      pinPrzycisk = przycisk;
+      pinKrancowka = krancowka;
+    }
+
+    void begin() {
+      if (_mcp != nullptr) {
+        // --- Tryb EKSPANDER (MCP) ---
+        _mcp->pinMode(pinPrzekaznik, OUTPUT);
+        _mcp->pinMode(pinPrzycisk, INPUT_PULLUP);
+        _mcp->pinMode(pinKrancowka, INPUT_PULLUP);
+        _mcp->digitalWrite(pinPrzekaznik, LOW);
+      } else {
+        // --- Tryb ARDUINO (Native) ---
+        pinMode(pinPrzekaznik, OUTPUT);
+        pinMode(pinPrzycisk, INPUT_PULLUP);
+        pinMode(pinKrancowka, INPUT_PULLUP);
+        digitalWrite(pinPrzekaznik, LOW);
+      }
+    }
+
+    void update() {
+      // Pomocnicze zmienne do odczytu stanu (niezależnie skąd pochodzą)
+      bool przyciskWcisniety = false;
+      bool krancowkaAktywna = false;
+
+      // 1. ODCZYT STANU (Abstrakcja sprzętowa)
+      if (_mcp != nullptr) {
+        // Czytamy z MCP
+        przyciskWcisniety = (_mcp->digitalRead(pinPrzycisk) == LOW);
+        krancowkaAktywna = (_mcp->digitalRead(pinKrancowka) == LOW);
+      } else {
+        // Czytamy z Arduino
+        przyciskWcisniety = (digitalRead(pinPrzycisk) == LOW);
+        krancowkaAktywna = (digitalRead(pinKrancowka) == LOW);
+      }
+
+      // 2. LOGIKA (Taka sama dla obu przypadków!)
+      switch (aktualnyStan) {
+        case SPOCZYNEK:
+          if (przyciskWcisniety) { 
+             if (krancowkaAktywna) {
+                // Już otwarty
+             } else {
+                aktualnyStan = OTWIERANIE;
+                czasStartuRuchu = millis();
+                
+                // STEROWANIE WYJŚCIEM
+                if (_mcp != nullptr) _mcp->digitalWrite(pinPrzekaznik, HIGH);
+                else digitalWrite(pinPrzekaznik, HIGH);
+                
+                Serial.println("Startuje zawor...");
+             }
+             delay(50); 
+          }
+          break;
+
+        case OTWIERANIE:
+          if (krancowkaAktywna) {
+            // STOP
+            if (_mcp != nullptr) _mcp->digitalWrite(pinPrzekaznik, LOW);
+            else digitalWrite(pinPrzekaznik, LOW);
+            
+            aktualnyStan = ZAKONCZONO;
+            Serial.println("Sukces!");
+          }
+          
+          if (millis() - czasStartuRuchu > maxCzasRuchu) {
+            // STOP AWARYJNY
+            if (_mcp != nullptr) _mcp->digitalWrite(pinPrzekaznik, LOW);
+            else digitalWrite(pinPrzekaznik, LOW);
+            
+            aktualnyStan = BLAD;
+            Serial.println("Blad czasu!");
+          }
+          break;
+
+        case ZAKONCZONO:
+          if (millis() - czasStartuRuchu > 1000) aktualnyStan = SPOCZYNEK;
+          break;
+
+        case BLAD:
+          if (przyciskWcisniety) {
+            aktualnyStan = SPOCZYNEK;
+            delay(500);
+          }
+          break;
+      }
+    }
+};
+
+// --- DEFINICJA ZAWORÓW ---
+
+// 1. Zawór podpięty do MCP (Adresowanie I2C)
+SterownikZaworu zaworMCP(&mcp1, 0, 1, 2);
+SterownikZaworu zaworMCP2(&mcp2, 0, 1, 2);  
+
+// 2. Zawór podpięty BEZPOŚREDNIO do Arduino (Piny cyfrowe 2, 3, 4)
+// Podajemy 'nullptr' (lub NULL) jako pierwszy argument
+SterownikZaworu zaworArduino(nullptr, 2, 3, 4); 
 
 void setup() {
-  pinMode(pinPrzekaznikOtwieranie, OUTPUT);
-  
-  // Konfiguracja wejść (INPUT_PULLUP oznacza: wciśnięty/aktywny = LOW/GND)
-  pinMode(pinStartOtwieranie, INPUT_PULLUP);
-  pinMode(pinKrancowkaOtwarty, INPUT_PULLUP); 
-
   Serial.begin(9600);
-  Serial.println("System gotowy. Czekam na komende...");
+  
+  // Inicjalizacja MCP
+  if (!mcp1.begin_I2C(0x20)) {
+    Serial.println("Blad MCP!");
+    while(1);
+  }
+  if (!mcp2.begin_I2C(0x21)) {
+    Serial.println("Blad MCP!");
+    while(1);
+  }
+
+  // Uruchomienie zaworów
+  zaworMCP.begin();
+  zaworMCP2.begin();     // Skonfiguruje piny na chipie
+  zaworArduino.begin(); // Skonfiguruje piny na Arduino Mega
+  
+  Serial.println("System Hybrydowy Gotowy.");
 }
 
 void loop() {
-  
-  switch (aktualnyStan) {
-    
-    // --- STAN 1: Czekamy na rozkaz ---
-    case SPOCZYNEK:
-      // Jeśli wciśnięto przycisk startu ORAZ zawór nie jest już otwarty
-      if (digitalRead(pinStartOtwieranie) == LOW) {
-        // Sprawdzamy czy przypadkiem już nie jest otwarty
-        if (digitalRead(pinKrancowkaOtwarty) == LOW) {
-          Serial.println("Info: Zawor juz jest otwarty.");
-        } else {
-          // Rozpoczynamy procedurę
-          aktualnyStan = OTWIERANIE;
-          czasStartuRuchu = millis();
-          digitalWrite(pinPrzekaznikOtwieranie, HIGH); // "Wciskamy" przycisk w szafie
-          Serial.println("START: Trzymam przycisk otwierania...");
-        }
-        delay(200); // Mały anty-drgania styków
-      }
-      break;
-
-    // --- STAN 2: Trzymamy przycisk i czekamy na lampkę ---
-    case OTWIERANIE:
-      // 1. Sprawdź czy lampka się zapaliła (Sygnał dotarł)
-      if (digitalRead(pinKrancowkaOtwarty) == LOW) {
-        // SUKCES!
-        digitalWrite(pinPrzekaznikOtwieranie, LOW); // "Puszczamy" przycisk
-        aktualnyStan = ZAKONCZONO;
-        Serial.println("SUKCES: Lampka swieci. Puscilem przycisk.");
-      }
-      
-      // 2. Sprawdź czy nie minął czas (Watchdog)
-      if (millis() - czasStartuRuchu > maxCzasRuchu) {
-        // AWARIA!
-        digitalWrite(pinPrzekaznikOtwieranie, LOW); // Natychmiast puszczamy dla bezpieczeństwa
-        aktualnyStan = BLAD;
-        Serial.println("BLAD: Czas minal, a lampka sie nie zapalila!");
-      }
-      break;
-
-    // --- STAN 3: Reset po sukcesie ---
-    case ZAKONCZONO:
-      // Tu można dodać logikę co dalej. Na razie wracamy do spoczynku po 1 sek.
-      delay(1000);
-      aktualnyStan = SPOCZYNEK;
-      Serial.println("Gotowy do nastepnego cyklu.");
-      break;
-
-    // --- STAN 4: Obsługa błędu ---
-    case BLAD:
-      // Mruganie diodą, alarm itp.
-      // Aby zresetować, trzeba np. wcisnąć start ponownie
-      if (digitalRead(pinStartOtwieranie) == LOW) {
-        aktualnyStan = SPOCZYNEK;
-        Serial.println("Reset bledu.");
-        delay(500);
-      }
-      break;
-  }
+  zaworMCP.update();
+  zaworMCP2.update();
+  zaworArduino.update();
+  delay(10);
 }
