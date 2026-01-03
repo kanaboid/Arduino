@@ -1,8 +1,14 @@
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h> 
 
-Adafruit_MCP23X17 mcp1;
-Adafruit_MCP23X17 mcp2; // Adres 0x20
+Adafruit_MCP23X17 mcp1;// Adres 0x20
+Adafruit_MCP23X17 mcp2;// Adres 0x21
+Adafruit_MCP23X17 mcp3; // Adres 0x22
+Adafruit_MCP23X17 mcp4; // Adres 0x23
+Adafruit_MCP23X17 mcp5; // Adres 0x24
+Adafruit_MCP23X17 mcp6; // Adres 0x25
+Adafruit_MCP23X17 mcp7; // Adres 0x26
+
 
 // --- UNIWERSALNA KLASA STEROWNIKA ---
 class SterownikZaworu {
@@ -117,7 +123,8 @@ class SterownikZaworu {
 
 // 1. Zawór podpięty do MCP (Adresowanie I2C)
 SterownikZaworu zaworMCP(&mcp1, 0, 1, 2);
-SterownikZaworu zaworMCP2(&mcp2, 0, 1, 2);  
+SterownikZaworu zaworMCP2(&mcp2, 0, 1, 2);
+SterownikZaworu zaworMCP7(&mcp2, 0, 1, 2);  
 
 // 2. Zawór podpięty BEZPOŚREDNIO do Arduino (Piny cyfrowe 2, 3, 4)
 // Podajemy 'nullptr' (lub NULL) jako pierwszy argument
@@ -128,17 +135,41 @@ void setup() {
   
   // Inicjalizacja MCP
   if (!mcp1.begin_I2C(0x20)) {
-    Serial.println("Blad MCP!");
+    Serial.println("Blad MCP1!");
     while(1);
   }
   if (!mcp2.begin_I2C(0x21)) {
-    Serial.println("Blad MCP!");
+    Serial.println("Blad MCP2!");
     while(1);
   }
-
+  if (!mcp2.begin_I2C(0x22)) {
+    Serial.println("Blad MCP3!");
+    while(1);
+  }
+  if (!mcp2.begin_I2C(0x23)) {
+    Serial.println("Blad MCP4!");
+    while(1);
+  }
+  if (!mcp2.begin_I2C(0x24)) {
+    Serial.println("Blad MCP5!");
+    while(1);
+  }
+  if (!mcp2.begin_I2C(0x25)) {
+    Serial.println("Blad MCP6!");
+    while(1);
+  }
+  if (!mcp2.begin_I2C(0x26)) {
+    Serial.println("Blad MCP7!");
+    while(1);
+  }
+  //if (!mcp2.begin_I2C(0x27)) {
+  //  Serial.println("Blad MCP8!");
+  //  while(1);
+  //}
   // Uruchomienie zaworów
   zaworMCP.begin();
-  zaworMCP2.begin();     // Skonfiguruje piny na chipie
+  zaworMCP2.begin();
+  zaworMCP7.begin();     // Skonfiguruje piny na chipie
   zaworArduino.begin(); // Skonfiguruje piny na Arduino Mega
   
   Serial.println("System Hybrydowy Gotowy.");
